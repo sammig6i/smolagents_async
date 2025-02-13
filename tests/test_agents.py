@@ -31,12 +31,13 @@ from smolagents.agents import (
     ToolCallingAgent,
     populate_template,
 )
-from smolagents.default_tools import PythonInterpreterTool
+from smolagents.default_tools import DuckDuckGoSearchTool, PythonInterpreterTool, VisitWebpageTool
 from smolagents.memory import PlanningStep
 from smolagents.models import (
     ChatMessage,
     ChatMessageToolCall,
     ChatMessageToolCallDefinition,
+    HfApiModel,
     MessageRole,
     TransformersModel,
 )
@@ -436,10 +437,15 @@ class AgentTests(unittest.TestCase):
         assert len(agent.tools) == 1  # when no tools are provided, only the final_answer tool is added by default
 
         toolset_2 = [PythonInterpreterTool(), PythonInterpreterTool()]
-        agent = CodeAgent(tools=toolset_2, model=fake_code_model)
-        assert (
-            len(agent.tools) == 2
-        )  # deduplication of tools, so only one python_interpreter tool is added in addition to final_answer
+        with pytest.raises(ValueError) as e:
+            agent = CodeAgent(tools=toolset_2, model=fake_code_model)
+        assert "Each tool or managed_agent should have a unique name!" in str(e)
+
+        with pytest.raises(ValueError) as e:
+            agent.name = "python_interpreter"
+            agent.description = "empty"
+            CodeAgent(tools=[PythonInterpreterTool()], model=fake_code_model, managed_agents=[agent])
+        assert "Each tool or managed_agent should have a unique name!" in str(e)
 
         # check that python_interpreter base tool does not get added to CodeAgent
         agent = CodeAgent(tools=[], model=fake_code_model, add_base_tools=True)
@@ -483,132 +489,6 @@ class AgentTests(unittest.TestCase):
             agent.run("Count to 3")
         str_output = capture.get()
         assert "`additional_authorized_imports`" in str_output.replace("\n", "")
-
-    def test_multiagents(self):
-        class FakeModelMultiagentsManagerAgent:
-            model_id = "fake_model"
-
-            def __call__(
-                self,
-                messages,
-                stop_sequences=None,
-                grammar=None,
-                tools_to_call_from=None,
-            ):
-                if tools_to_call_from is not None:
-                    if len(messages) < 3:
-                        return ChatMessage(
-                            role="assistant",
-                            content="",
-                            tool_calls=[
-                                ChatMessageToolCall(
-                                    id="call_0",
-                                    type="function",
-                                    function=ChatMessageToolCallDefinition(
-                                        name="search_agent",
-                                        arguments="Who is the current US president?",
-                                    ),
-                                )
-                            ],
-                        )
-                    else:
-                        assert "Report on the current US president" in str(messages)
-                        return ChatMessage(
-                            role="assistant",
-                            content="",
-                            tool_calls=[
-                                ChatMessageToolCall(
-                                    id="call_0",
-                                    type="function",
-                                    function=ChatMessageToolCallDefinition(
-                                        name="final_answer", arguments="Final report."
-                                    ),
-                                )
-                            ],
-                        )
-                else:
-                    if len(messages) < 3:
-                        return ChatMessage(
-                            role="assistant",
-                            content="""
-Thought: Let's call our search agent.
-Code:
-```py
-result = search_agent("Who is the current US president?")
-```<end_code>
-""",
-                        )
-                    else:
-                        assert "Report on the current US president" in str(messages)
-                        return ChatMessage(
-                            role="assistant",
-                            content="""
-Thought: Let's return the report.
-Code:
-```py
-final_answer("Final report.")
-```<end_code>
-""",
-                        )
-
-        manager_model = FakeModelMultiagentsManagerAgent()
-
-        class FakeModelMultiagentsManagedAgent:
-            model_id = "fake_model"
-
-            def __call__(
-                self,
-                messages,
-                tools_to_call_from=None,
-                stop_sequences=None,
-                grammar=None,
-            ):
-                return ChatMessage(
-                    role="assistant",
-                    content="",
-                    tool_calls=[
-                        ChatMessageToolCall(
-                            id="call_0",
-                            type="function",
-                            function=ChatMessageToolCallDefinition(
-                                name="final_answer",
-                                arguments="Report on the current US president",
-                            ),
-                        )
-                    ],
-                )
-
-        managed_model = FakeModelMultiagentsManagedAgent()
-
-        web_agent = ToolCallingAgent(
-            tools=[],
-            model=managed_model,
-            max_steps=10,
-            name="search_agent",
-            description="Runs web searches for you. Give it your request as an argument. Make the request as detailed as needed, you can ask for thorough reports",
-        )
-
-        manager_code_agent = CodeAgent(
-            tools=[],
-            model=manager_model,
-            managed_agents=[web_agent],
-            additional_authorized_imports=["time", "numpy", "pandas"],
-        )
-
-        report = manager_code_agent.run("Fake question.")
-        assert report == "Final report."
-
-        manager_toolcalling_agent = ToolCallingAgent(
-            tools=[],
-            model=manager_model,
-            managed_agents=[web_agent],
-        )
-
-        report = manager_toolcalling_agent.run("Fake question.")
-        assert report == "Final report."
-
-        # Test that visualization works
-        manager_code_agent.visualize()
 
     def test_code_nontrivial_final_answer_works(self):
         def fake_code_model_final_answer(messages, stop_sequences=None, grammar=None):
@@ -885,6 +765,191 @@ class TestCodeAgent:
                 "<summary_of_work>\n\nTest summary\n---\n</summary_of_work>"
             )
         assert result == expected_summary
+
+
+class MultiAgentsTests(unittest.TestCase):
+    def test_multiagents_save(self):
+        model = HfApiModel("Qwen/Qwen2.5-Coder-32B-Instruct", max_tokens=2096, temperature=0.5)
+
+        web_agent = ToolCallingAgent(
+            model=model,
+            tools=[DuckDuckGoSearchTool(max_results=2), VisitWebpageTool()],
+            name="web_agent",
+            description="does web searches",
+        )
+        code_agent = CodeAgent(model=model, tools=[], name="useless", description="does nothing in particular")
+
+        agent = CodeAgent(
+            model=model,
+            tools=[],
+            additional_authorized_imports=["pandas", "datetime"],
+            managed_agents=[web_agent, code_agent],
+        )
+        agent.save("agent_export")
+
+        expected_structure = {
+            "managed_agents": {
+                "useless": {"tools": {"files": ["final_answer.py"]}, "files": ["agent.json", "prompts.yaml"]},
+                "web_agent": {
+                    "tools": {"files": ["final_answer.py", "visit_webpage.py", "web_search.py"]},
+                    "files": ["agent.json", "prompts.yaml"],
+                },
+            },
+            "tools": {"files": ["final_answer.py"]},
+            "files": ["app.py", "requirements.txt", "agent.json", "prompts.yaml"],
+        }
+
+        def verify_structure(current_path: Path, structure: dict):
+            for dir_name, contents in structure.items():
+                if dir_name != "files":
+                    # For directories, verify they exist and recurse into them
+                    dir_path = current_path / dir_name
+                    assert dir_path.exists(), f"Directory {dir_path} does not exist"
+                    assert dir_path.is_dir(), f"{dir_path} is not a directory"
+                    verify_structure(dir_path, contents)
+                else:
+                    # For files, verify each exists in the current path
+                    for file_name in contents:
+                        file_path = current_path / file_name
+                        assert file_path.exists(), f"File {file_path} does not exist"
+                        assert file_path.is_file(), f"{file_path} is not a file"
+
+        verify_structure(Path("agent_export"), expected_structure)
+
+        # Test that re-loaded agents work as expected.
+        agent2 = CodeAgent.from_folder("agent_export", planning_interval=5)
+        assert agent2.planning_interval == 5  # Check that kwargs are used
+        assert set(agent2.authorized_imports) == set(["pandas", "datetime"] + BASE_BUILTIN_MODULES)
+        assert (
+            agent2.managed_agents["web_agent"].tools["web_search"].max_results == 10
+        )  # For now tool init parameters are forgotten
+        assert agent2.model.kwargs["temperature"] == pytest.approx(0.5)
+
+    def test_multiagents(self):
+        class FakeModelMultiagentsManagerAgent:
+            model_id = "fake_model"
+
+            def __call__(
+                self,
+                messages,
+                stop_sequences=None,
+                grammar=None,
+                tools_to_call_from=None,
+            ):
+                if tools_to_call_from is not None:
+                    if len(messages) < 3:
+                        return ChatMessage(
+                            role="assistant",
+                            content="",
+                            tool_calls=[
+                                ChatMessageToolCall(
+                                    id="call_0",
+                                    type="function",
+                                    function=ChatMessageToolCallDefinition(
+                                        name="search_agent",
+                                        arguments="Who is the current US president?",
+                                    ),
+                                )
+                            ],
+                        )
+                    else:
+                        assert "Report on the current US president" in str(messages)
+                        return ChatMessage(
+                            role="assistant",
+                            content="",
+                            tool_calls=[
+                                ChatMessageToolCall(
+                                    id="call_0",
+                                    type="function",
+                                    function=ChatMessageToolCallDefinition(
+                                        name="final_answer", arguments="Final report."
+                                    ),
+                                )
+                            ],
+                        )
+                else:
+                    if len(messages) < 3:
+                        return ChatMessage(
+                            role="assistant",
+                            content="""
+Thought: Let's call our search agent.
+Code:
+```py
+result = search_agent("Who is the current US president?")
+```<end_code>
+""",
+                        )
+                    else:
+                        assert "Report on the current US president" in str(messages)
+                        return ChatMessage(
+                            role="assistant",
+                            content="""
+Thought: Let's return the report.
+Code:
+```py
+final_answer("Final report.")
+```<end_code>
+""",
+                        )
+
+        manager_model = FakeModelMultiagentsManagerAgent()
+
+        class FakeModelMultiagentsManagedAgent:
+            model_id = "fake_model"
+
+            def __call__(
+                self,
+                messages,
+                tools_to_call_from=None,
+                stop_sequences=None,
+                grammar=None,
+            ):
+                return ChatMessage(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ChatMessageToolCall(
+                            id="call_0",
+                            type="function",
+                            function=ChatMessageToolCallDefinition(
+                                name="final_answer",
+                                arguments="Report on the current US president",
+                            ),
+                        )
+                    ],
+                )
+
+        managed_model = FakeModelMultiagentsManagedAgent()
+
+        web_agent = ToolCallingAgent(
+            tools=[],
+            model=managed_model,
+            max_steps=10,
+            name="search_agent",
+            description="Runs web searches for you. Give it your request as an argument. Make the request as detailed as needed, you can ask for thorough reports",
+        )
+
+        manager_code_agent = CodeAgent(
+            tools=[],
+            model=manager_model,
+            managed_agents=[web_agent],
+            additional_authorized_imports=["time", "numpy", "pandas"],
+        )
+
+        report = manager_code_agent.run("Fake question.")
+        assert report == "Final report."
+
+        manager_toolcalling_agent = ToolCallingAgent(
+            tools=[],
+            model=manager_model,
+            managed_agents=[web_agent],
+        )
+
+        report = manager_toolcalling_agent.run("Fake question.")
+        assert report == "Final report."
+
+        # Test that visualization works
+        manager_code_agent.visualize()
 
 
 @pytest.fixture
