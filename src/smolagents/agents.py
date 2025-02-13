@@ -460,7 +460,7 @@ You have been provided with these additional arguments, that you can access usin
 
         if stream:
             # The steps are returned as they are executed through an async generator
-            return self._run(task=self.task, images=images)
+            return await self._run(task=self.task, images=images)
         # Outputs are returned only at the end as a string. We only look at the last step
         async for step in self._run(task=self.task, images=images):
             last_step = step
@@ -1289,7 +1289,7 @@ class CodeAgent(MultiStepAgent):
         self.logger.log_code(title="Executing parsed code:", content=code_action, level=LogLevel.INFO)
         is_final_answer = False
         try:
-            output, execution_logs, is_final_answer = self.python_executor(
+            output, execution_logs, is_final_answer = await self.python_executor(
                 code_action,
                 self.state,
             )

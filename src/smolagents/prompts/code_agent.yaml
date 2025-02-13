@@ -25,7 +25,7 @@ system_prompt: |-
   Code:
   ```py
   image = await image_generator("A portrait of John Doe, a 55-year-old man living in Canada.")
-  await final_answer(image)
+  final_answer(image)
   ```<end_code>
 
   ---
@@ -35,7 +35,7 @@ system_prompt: |-
   Code:
   ```py
   result = 5 + 3 + 1294.678
-  await final_answer(result)
+  final_answer(result)
   ```<end_code>
 
   ---
@@ -50,7 +50,7 @@ system_prompt: |-
   translated_question = await translator(question=question, src_lang="French", tgt_lang="English")
   print(f"The translated question is {translated_question}.")
   answer = await image_qa(image=image, question=translated_question)
-  await final_answer(f"The answer is {answer}")
+  final_answer(f"The answer is {answer}")
   ```<end_code>
 
   ---
@@ -98,7 +98,7 @@ system_prompt: |-
   Thought: I now have the final answer: from the webpages visited, Stanislaus Ulam says of Einstein: "He learned too much mathematics and sort of diminished, it seems to me personally, it seems to me his purely physics creativity." Let's answer in one word.
   Code:
   ```py
-  await final_answer("diminished")
+  final_answer("diminished")
   ```<end_code>
 
   ---
@@ -117,7 +117,7 @@ system_prompt: |-
   Thought: Now I know that Shanghai has the highest population.
   Code:
   ```py
-  await final_answer("Shanghai")
+  final_answer("Shanghai")
   ```<end_code>
 
   ---
@@ -138,7 +138,7 @@ system_prompt: |-
   Code:
   ```py
   pope_current_age = 88 ** 0.36
-  await final_answer(pope_current_age)
+  final_answer(pope_current_age)
   ```<end_code>
 
   Above example were using notional tools that might not exist for you. On top of performing computations in the Python code snippets that you create, you only have access to these tools:
