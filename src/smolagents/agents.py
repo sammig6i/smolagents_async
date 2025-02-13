@@ -17,6 +17,7 @@
 
 __all__ = ["AgentMemory", "CodeAgent", "MultiStepAgent", "ToolCallingAgent"]
 
+import asyncio
 import importlib.resources
 import inspect
 import re
@@ -24,7 +25,7 @@ import textwrap
 import time
 from collections import deque
 from logging import getLogger
-from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple, TypedDict, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple, TypedDict, Union, AsyncGenerator, Awaitable
 
 import yaml
 from jinja2 import StrictUndefined, Template
@@ -188,7 +189,7 @@ class MultiStepAgent:
     def __init__(
         self,
         tools: List[Tool],
-        model: Callable[[List[Dict[str, str]]], ChatMessage],
+        model: Callable[[List[Dict[str, str]]], Awaitable[ChatMessage]],
         prompt_templates: Optional[PromptTemplates] = None,
         max_steps: int = 6,
         tool_parser: Optional[Callable] = None,
@@ -295,7 +296,7 @@ class MultiStepAgent:
             )
         return rationale.strip(), action.strip()
 
-    def provide_final_answer(self, task: str, images: Optional[list[str]]) -> str:
+    async def provide_final_answer(self, task: str, images: Optional[list[str]]) -> str:
         """
         Provide the final answer to the task, based on the logs of the agent's interactions.
 
@@ -334,7 +335,7 @@ class MultiStepAgent:
             }
         ]
         try:
-            chat_message: ChatMessage = self.model(messages)
+            chat_message: ChatMessage = await self.model(messages)
             return chat_message.content
         except Exception as e:
             return f"Error in generating final LLM output:\n{e}"
@@ -386,11 +387,11 @@ class MultiStepAgent:
                 )
                 raise AgentExecutionError(error_msg, self.logger)
 
-    def step(self, memory_step: ActionStep) -> Union[None, Any]:
-        """To be implemented in children classes. Should return either None if the step is not final."""
+    async def step(self, memory_step: ActionStep) -> Union[None, Any]:
+        """To be implemented in child classes"""
         pass
 
-    def run(
+    async def run(
         self,
         task: str,
         stream: bool = False,
@@ -439,14 +440,16 @@ You have been provided with these additional arguments, that you can access usin
         self.memory.steps.append(TaskStep(task=self.task, task_images=images))
 
         if stream:
-            # The steps are returned as they are executed through a generator to iterate on.
+            # The steps are returned as they are executed through an async generator
             return self._run(task=self.task, images=images)
         # Outputs are returned only at the end as a string. We only look at the last step
-        return deque(self._run(task=self.task, images=images), maxlen=1)[0]
+        async for step in self._run(task=self.task, images=images):
+            last_step = step
+        return last_step
 
-    def _run(self, task: str, images: List[str] | None = None) -> Generator[ActionStep | AgentType, None, None]:
+    async def _run(self, task: str, images: List[str] | None = None) -> AsyncGenerator[ActionStep | AgentType, None]:
         """
-        Run the agent in streaming mode and returns a generator of all the steps.
+        Run the agent in streaming mode and returns a async generator of all the steps.
 
         Args:
             task (`str`): Task to perform.
@@ -463,7 +466,7 @@ You have been provided with these additional arguments, that you can access usin
             )
             try:
                 if self.planning_interval is not None and self.step_number % self.planning_interval == 1:
-                    self.planning_step(
+                    await self.planning_step(
                         task,
                         is_first_step=(self.step_number == 1),
                         step=self.step_number,
@@ -471,7 +474,7 @@ You have been provided with these additional arguments, that you can access usin
                 self.logger.log_rule(f"Step {self.step_number}", level=LogLevel.INFO)
 
                 # Run one step!
-                final_answer = self.step(memory_step)
+                final_answer = await self.step(memory_step)
                 if final_answer is not None and self.final_answer_checks is not None:
                     for check_function in self.final_answer_checks:
                         try:
@@ -488,15 +491,15 @@ You have been provided with these additional arguments, that you can access usin
                 for callback in self.step_callbacks:
                     # For compatibility with old callbacks that don't take the agent as an argument
                     if len(inspect.signature(callback).parameters) == 1:
-                        callback(memory_step)
+                        await callback(memory_step) if asyncio.iscoroutinefunction(callback) else callback(memory_step)
                     else:
-                        callback(memory_step, agent=self)
+                        await callback(memory_step, agent=self) if asyncio.iscoroutinefunction(callback) else callback(memory_step, agent=self)
                 self.step_number += 1
                 yield memory_step
 
         if final_answer is None and self.step_number == self.max_steps + 1:
             error_message = "Reached max steps."
-            final_answer = self.provide_final_answer(task, images)
+            final_answer = await self.provide_final_answer(task, images)
             final_memory_step = ActionStep(
                 step_number=self.step_number, error=AgentMaxStepsError(error_message, self.logger)
             )
@@ -507,14 +510,14 @@ You have been provided with these additional arguments, that you can access usin
             for callback in self.step_callbacks:
                 # For compatibility with old callbacks that don't take the agent as an argument
                 if len(inspect.signature(callback).parameters) == 1:
-                    callback(final_memory_step)
+                    await callback(final_memory_step) if asyncio.iscoroutinefunction(callback) else callback(final_memory_step)
                 else:
-                    callback(final_memory_step, agent=self)
+                    await callback(final_memory_step, agent=self) if asyncio.iscoroutinefunction(callback) else callback(final_memory_step, agent=self)
             yield final_memory_step
 
         yield handle_agent_output_types(final_answer)
 
-    def planning_step(self, task, is_first_step: bool, step: int) -> None:
+    async def planning_step(self, task, is_first_step: bool, step: int) -> None:
         """
         Used periodically by the agent to plan the next steps to reach the objective.
 
@@ -545,7 +548,7 @@ You have been provided with these additional arguments, that you can access usin
             }
             input_messages = [message_prompt_facts, message_prompt_task]
 
-            chat_message_facts: ChatMessage = self.model(input_messages)
+            chat_message_facts: ChatMessage = await self.model(input_messages)
             answer_facts = chat_message_facts.content
 
             message_prompt_plan = {
@@ -565,7 +568,7 @@ You have been provided with these additional arguments, that you can access usin
                     }
                 ],
             }
-            chat_message_plan: ChatMessage = self.model(
+            chat_message_plan: ChatMessage = await self.model(
                 [message_prompt_plan],
                 stop_sequences=["<end_plan>"],
             )
@@ -612,7 +615,7 @@ You have been provided with these additional arguments, that you can access usin
                 "content": [{"type": "text", "text": self.prompt_templates["planning"]["update_facts_post_messages"]}],
             }
             input_messages = [facts_update_pre_messages] + memory_messages + [facts_update_post_messages]
-            chat_message_facts: ChatMessage = self.model(input_messages)
+            chat_message_facts: ChatMessage = await self.model(input_messages)
             facts_update = chat_message_facts.content
 
             # Redact updated plan
@@ -645,7 +648,7 @@ You have been provided with these additional arguments, that you can access usin
                     }
                 ],
             }
-            chat_message_plan: ChatMessage = self.model(
+            chat_message_plan: ChatMessage = await self.model(
                 [update_plan_pre_messages] + memory_messages + [update_plan_post_messages],
                 stop_sequences=["<end_plan>"],
             )
@@ -693,7 +696,7 @@ You have been provided with these additional arguments, that you can access usin
         """
         self.memory.replay(self.logger, detailed=detailed)
 
-    def __call__(self, task: str, **kwargs):
+    async def __call__(self, task: str, **kwargs):
         """Adds additional prompting for the managed agent, runs it, and wraps the output.
 
         This method is called only by a managed agent.
@@ -702,7 +705,7 @@ You have been provided with these additional arguments, that you can access usin
             self.prompt_templates["managed_agent"]["task"],
             variables=dict(name=self.name, task=task),
         )
-        report = self.run(full_task, **kwargs)
+        report = await self.run(full_task, **kwargs)
         answer = populate_template(
             self.prompt_templates["managed_agent"]["report"], variables=dict(name=self.name, final_answer=report)
         )
@@ -753,7 +756,7 @@ class ToolCallingAgent(MultiStepAgent):
         )
         return system_prompt
 
-    def step(self, memory_step: ActionStep) -> Union[None, Any]:
+    async def step(self, memory_step: ActionStep) -> Union[None, Any]:
         """
         Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
         Returns None if the step is not final.
@@ -766,7 +769,7 @@ class ToolCallingAgent(MultiStepAgent):
         memory_step.model_input_messages = memory_messages.copy()
 
         try:
-            model_message: ChatMessage = self.model(
+            model_message: ChatMessage = await self.model(
                 memory_messages,
                 tools_to_call_from=list(self.tools.values()),
                 stop_sequences=["Observation:"],
@@ -857,7 +860,7 @@ class CodeAgent(MultiStepAgent):
     def __init__(
         self,
         tools: List[Tool],
-        model: Callable[[List[Dict[str, str]]], ChatMessage],
+        model: Callable[[List[Dict[str, str]]], Awaitable[ChatMessage]],
         prompt_templates: Optional[PromptTemplates] = None,
         grammar: Optional[Dict[str, str]] = None,
         additional_authorized_imports: Optional[List[str]] = None,
@@ -919,7 +922,7 @@ class CodeAgent(MultiStepAgent):
         )
         return system_prompt
 
-    def step(self, memory_step: ActionStep) -> Union[None, Any]:
+    async def step(self, memory_step: ActionStep) -> Union[None, Any]:
         """
         Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
         Returns None if the step is not final.
@@ -932,7 +935,7 @@ class CodeAgent(MultiStepAgent):
         memory_step.model_input_messages = memory_messages.copy()
         try:
             additional_args = {"grammar": self.grammar} if self.grammar is not None else {}
-            chat_message: ChatMessage = self.model(
+            chat_message: ChatMessage = await self.model(
                 self.input_messages,
                 stop_sequences=["<end_code>", "Observation:"],
                 **additional_args,

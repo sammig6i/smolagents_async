@@ -302,7 +302,7 @@ class Model:
             "output_token_count": self.last_output_token_count,
         }
 
-    def __call__(
+    async def __call__(
         self,
         messages: List[Dict[str, str]],
         stop_sequences: Optional[List[str]] = None,
@@ -327,7 +327,7 @@ class Model:
         Returns:
             `ChatMessage`: A chat message object containing the model's response.
         """
-        pass  # To be implemented in child classes!
+        raise NotImplementedError("To be implemented in child classes!")
 
 
 class HfApiModel(Model):
@@ -524,7 +524,7 @@ class TransformersModel(Model):
 
         return StoppingCriteriaList([StopOnStrings(stop_sequences, tokenizer)])
 
-    def __call__(
+    async def __call__(
         self,
         messages: List[Dict[str, str]],
         stop_sequences: Optional[List[str]] = None,
@@ -676,7 +676,7 @@ class LiteLLMModel(Model):
         self.api_key = api_key
         self.custom_role_conversions = custom_role_conversions
 
-    def __call__(
+    async def __call__(
         self,
         messages: List[Dict[str, str]],
         stop_sequences: Optional[List[str]] = None,
@@ -700,7 +700,7 @@ class LiteLLMModel(Model):
             **kwargs,
         )
 
-        response = litellm.completion(**completion_kwargs)
+        response = await litellm.acompletion(**completion_kwargs)
 
         self.last_input_token_count = response.usage.prompt_tokens
         self.last_output_token_count = response.usage.completion_tokens
@@ -754,7 +754,7 @@ class OpenAIServerModel(Model):
 
         super().__init__(**kwargs)
         self.model_id = model_id
-        self.client = openai.OpenAI(
+        self.client = openai.AsyncOpenAI(
             base_url=api_base,
             api_key=api_key,
             organization=organization,
@@ -762,7 +762,7 @@ class OpenAIServerModel(Model):
         )
         self.custom_role_conversions = custom_role_conversions
 
-    def __call__(
+    async def __call__(
         self,
         messages: List[Dict[str, str]],
         stop_sequences: Optional[List[str]] = None,
@@ -776,18 +776,20 @@ class OpenAIServerModel(Model):
             grammar=grammar,
             tools_to_call_from=tools_to_call_from,
             model=self.model_id,
-            custom_role_conversions=self.custom_role_conversions,
             convert_images_to_image_urls=True,
+            custom_role_conversions=self.custom_role_conversions,
             **kwargs,
         )
-        response = self.client.chat.completions.create(**completion_kwargs)
+
+        response = await self.client.chat.completions.create(**completion_kwargs)
+
         self.last_input_token_count = response.usage.prompt_tokens
         self.last_output_token_count = response.usage.completion_tokens
-
         message = ChatMessage.from_dict(
             response.choices[0].message.model_dump(include={"role", "content", "tool_calls"})
         )
         message.raw = response
+
         if tools_to_call_from is not None:
             return parse_tool_args_if_needed(message)
         return message
@@ -829,7 +831,7 @@ class AzureOpenAIServerModel(OpenAIServerModel):
         # if we've reached this point, it means the openai package is available (checked in baseclass) so go ahead and import it
         import openai
 
-        self.client = openai.AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=azure_endpoint)
+        self.client = openai.AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=azure_endpoint)
 
 
 __all__ = [

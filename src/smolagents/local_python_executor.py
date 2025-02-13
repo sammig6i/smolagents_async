@@ -640,6 +640,16 @@ def evaluate_call(
                 raise InterpreterError(
                     f"Invoking a builtin function that has not been explicitly added as a tool is not allowed ({func_name})."
                 )
+            
+            # Check if the function is async
+            if inspect.iscoroutinefunction(func):
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                return loop.run_until_complete(func(*args, **kwargs))
             return func(*args, **kwargs)
 
 

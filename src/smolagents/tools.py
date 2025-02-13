@@ -108,6 +108,7 @@ class Tool:
 
     def __init__(self, *args, **kwargs):
         self.is_initialized = False
+        self.validate_arguments()
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -169,33 +170,33 @@ class Tool:
                         f"Nullable argument '{key}' in function signature should have key 'nullable' set to True in inputs."
                     )
 
-    def forward(self, *args, **kwargs):
-        return NotImplementedError("Write this method in your subclass of `Tool`.")
-
-    def __call__(self, *args, sanitize_inputs_outputs: bool = False, **kwargs):
-        if not self.is_initialized:
-            self.setup()
-
-        # Handle the arguments might be passed as a single dictionary
-        if len(args) == 1 and len(kwargs) == 0 and isinstance(args[0], dict):
-            potential_kwargs = args[0]
-
-            # If the dictionary keys match our input parameters, convert it to kwargs
-            if all(key in self.inputs for key in potential_kwargs):
-                args = ()
-                kwargs = potential_kwargs
-
-        if sanitize_inputs_outputs:
-            args, kwargs = handle_agent_input_types(*args, **kwargs)
-        outputs = self.forward(*args, **kwargs)
-        if sanitize_inputs_outputs:
-            outputs = handle_agent_output_types(outputs, self.output_type)
-        return outputs
-
-    def setup(self):
+    async def forward(self, *args, **kwargs):
         """
-        Overwrite this method here for any operation that is expensive and needs to be executed before you start using
-        your tool. Such as loading a big model.
+        The main method to implement in subclasses. Should be async.
+        """
+        raise NotImplementedError()
+
+    async def __call__(self, *args, sanitize_inputs_outputs: bool = False, **kwargs):
+        """
+        Async wrapper around tool execution that handles input/output sanitization
+        """
+        if not hasattr(self, "_is_setup"):
+            await self.setup()
+            self._is_setup = True
+
+        if sanitize_inputs_outputs:
+            args = [handle_agent_input_types(arg) for arg in args]
+            kwargs = {k: handle_agent_input_types(v) for k, v in kwargs.items()}
+
+        result = await self.forward(*args, **kwargs)
+
+        if sanitize_inputs_outputs:
+            result = handle_agent_output_types(result, self.output_type)
+        return result
+
+    async def setup(self):
+        """
+        Async setup method for expensive initialization
         """
         self.is_initialized = True
 
@@ -555,7 +556,7 @@ class Tool:
                     arg = handle_file(arg)
                 return arg
 
-            def forward(self, *args, **kwargs):
+            async def forward(self, *args, **kwargs):
                 # Preprocess args and kwargs:
                 args = list(args)
                 for i, arg in enumerate(args):
@@ -620,15 +621,34 @@ class Tool:
                 self.langchain_tool = _langchain_tool
                 self.is_initialized = True
 
-            def forward(self, *args, **kwargs):
+            async def forward(self, *args, **kwargs):
                 tool_input = kwargs.copy()
                 for index, argument in enumerate(args):
                     if index < len(self.inputs):
                         input_key = next(iter(self.inputs))
                         tool_input[input_key] = argument
-                return self.langchain_tool.run(tool_input)
+                return await self.langchain_tool.run(tool_input)
 
         return LangChainToolWrapper(langchain_tool)
+
+    @property
+    def json_schema(self) -> Dict:
+        """
+        Returns the JSON schema for this tool.
+        """
+        return get_json_schema(self)
+
+    def to_source(self) -> str:
+        """
+        Returns the source code for this tool.
+        """
+        return instance_to_source(self)
+
+    def __str__(self):
+        """
+        Returns a string representation of this tool.
+        """
+        return f"{self.name}: {self.description}"
 
 
 def launch_gradio_demo(tool: Tool):
@@ -965,9 +985,9 @@ class PipelineTool(Tool):
 
         super().__init__()
 
-    def setup(self):
+    async def setup(self):
         """
-        Instantiates the `pre_processor`, `model` and `post_processor` if necessary.
+        Async Instantiates the `pre_processor`, `model` and `post_processor` if necessary.
         """
         if isinstance(self.pre_processor, str):
             if self.pre_processor_class is None:
@@ -1001,13 +1021,13 @@ class PipelineTool(Tool):
 
         super().setup()
 
-    def encode(self, raw_inputs):
+    async def encode(self, raw_inputs):
         """
         Uses the `pre_processor` to prepare the inputs for the `model`.
         """
         return self.pre_processor(raw_inputs)
 
-    def forward(self, inputs):
+    async def forward(self, inputs):
         """
         Sends the inputs through the `model`.
         """
@@ -1016,30 +1036,30 @@ class PipelineTool(Tool):
         with torch.no_grad():
             return self.model(**inputs)
 
-    def decode(self, outputs):
+    async def decode(self, outputs):
         """
         Uses the `post_processor` to decode the model output.
         """
         return self.post_processor(outputs)
 
-    def __call__(self, *args, **kwargs):
+    async def __call__(self, *args, **kwargs):
         import torch
         from accelerate.utils import send_to_device
 
         args, kwargs = handle_agent_input_types(*args, **kwargs)
 
         if not self.is_initialized:
-            self.setup()
+            await self.setup()
 
-        encoded_inputs = self.encode(*args, **kwargs)
+        encoded_inputs = await self.encode(*args, **kwargs)
 
         tensor_inputs = {k: v for k, v in encoded_inputs.items() if isinstance(v, torch.Tensor)}
         non_tensor_inputs = {k: v for k, v in encoded_inputs.items() if not isinstance(v, torch.Tensor)}
 
         encoded_inputs = send_to_device(tensor_inputs, self.device)
-        outputs = self.forward({**encoded_inputs, **non_tensor_inputs})
+        outputs = await self.forward({**encoded_inputs, **non_tensor_inputs})
         outputs = send_to_device(outputs, "cpu")
-        decoded_outputs = self.decode(outputs)
+        decoded_outputs = await self.decode(outputs)
 
         return handle_agent_output_types(decoded_outputs, self.output_type)
 
