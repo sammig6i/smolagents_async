@@ -85,7 +85,7 @@ BASE_PYTHON_TOOLS = {
     "atan2": math.atan2,
     "degrees": math.degrees,
     "radians": math.radians,
-    "pow": math.pow,
+    "pow": pow,
     "sqrt": math.sqrt,
     "len": len,
     "sum": sum,
@@ -723,7 +723,7 @@ def evaluate_condition(
     static_tools: Dict[str, Callable],
     custom_tools: Dict[str, Callable],
     authorized_imports: List[str],
-) -> bool:
+) -> bool | object:
     left = evaluate_ast(condition.left, state, static_tools, custom_tools, authorized_imports)
     comparators = [
         evaluate_ast(c, state, static_tools, custom_tools, authorized_imports) for c in condition.comparators
@@ -756,6 +756,9 @@ def evaluate_condition(
             current_result = current_left not in comparator
         else:
             raise InterpreterError(f"Operator not supported: {op}")
+
+        if not isinstance(current_result, bool):
+            return current_result
 
         result = result & current_result
         current_left = comparator
@@ -1191,7 +1194,7 @@ def evaluate_ast(
             The list of modules that can be imported by the code. By default, only a few safe modules are allowed.
             If it contains "*", it will authorize any import. Use this at your own risk!
     """
-    if state["_operations_count"] >= MAX_OPERATIONS:
+    if state.setdefault("_operations_count", 0) >= MAX_OPERATIONS:
         raise InterpreterError(
             f"Reached the max number of operations of {MAX_OPERATIONS}. Maybe there is an infinite loop somewhere in the code, or you're just asking too many calculations."
         )
@@ -1370,7 +1373,6 @@ def evaluate_python_code(
     custom_tools = custom_tools if custom_tools is not None else {}
     result = None
     state["_print_outputs"] = PrintContainer()
-    state["_operations_count"] = 0
 
     def final_answer(value):
         raise FinalAnswerException(value)
