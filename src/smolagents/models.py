@@ -1066,7 +1066,10 @@ class StreamingLiteLLMModel(LiteLLMModel):
         accumulated_content = ""
         tool_calls = []
 
-        async for chunk in await litellm.acompletion(**completion_kwargs):
+        stream = await litellm.acompletion(**completion_kwargs)
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
             if delta.content:
                 accumulated_content += delta.content
@@ -1145,6 +1148,8 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
 
         stream = await self.client.chat.completions.create(**completion_kwargs)
         async for chunk in stream:
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
             if delta.content:
                 accumulated_content += delta.content
@@ -1223,6 +1228,8 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
 
         stream = await self.client.chat.completions.create(**completion_kwargs)
         async for chunk in stream:
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
             if delta.content:
                 accumulated_content += delta.content
