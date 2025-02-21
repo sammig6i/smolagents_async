@@ -1024,6 +1024,244 @@ class AzureOpenAIServerModel(OpenAIServerModel):
         self.client = openai.AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=azure_endpoint)
 
 
+class StreamingLiteLLMModel(LiteLLMModel):
+    """A streaming version of LiteLLMModel that supports callbacks for each token.
+
+    Parameters:
+        on_chunk_callback (`Callable[[str], None]`, *optional*):
+            A callback function that will be called with each new token chunk.
+        **kwargs:
+            Additional keyword arguments passed to LiteLLMModel.
+    """
+
+    def __init__(self, on_chunk_callback=None, **kwargs):
+        super().__init__(**kwargs)
+        self.on_chunk_callback = on_chunk_callback
+
+    async def __call__(
+        self,
+        messages: List[Dict[str, str]],
+        stop_sequences: Optional[List[str]] = None,
+        grammar: Optional[str] = None,
+        tools_to_call_from: Optional[List[Tool]] = None,
+        **kwargs,
+    ) -> ChatMessage:
+        import litellm
+
+        completion_kwargs = self._prepare_completion_kwargs(
+            messages=messages,
+            stop_sequences=stop_sequences,
+            grammar=grammar,
+            tools_to_call_from=tools_to_call_from,
+            model=self.model_id,
+            api_base=self.api_base,
+            api_key=self.api_key,
+            convert_images_to_image_urls=True,
+            flatten_messages_as_text=self._flatten_messages_as_text,
+            custom_role_conversions=self.custom_role_conversions,
+            stream=True,  # Force streaming
+            **kwargs,
+        )
+
+        accumulated_content = ""
+        tool_calls = []
+
+        async for chunk in await litellm.acompletion(**completion_kwargs):
+            delta = chunk.choices[0].delta
+            if delta.content:
+                accumulated_content += delta.content
+                if self.on_chunk_callback:
+                    self.on_chunk_callback(delta.content)
+            if delta.tool_calls:
+                for tool_call in delta.tool_calls:
+                    if not tool_calls:
+                        tool_calls.append(tool_call)
+                    else:
+                        # Update the last tool call with new content
+                        if tool_call.function.arguments:
+                            tool_calls[-1].function.arguments += tool_call.function.arguments
+
+        self.last_input_token_count = len(completion_kwargs["messages"][0]["content"])  # Approximate
+        self.last_output_token_count = len(accumulated_content)  # Approximate
+
+        message = ChatMessage(
+            role="assistant",
+            content=accumulated_content if not tool_calls else "",
+            tool_calls=[
+                ChatMessageToolCall(
+                    id=tc.id,
+                    type="function",
+                    function=ChatMessageToolCallDefinition(
+                        name=tc.function.name,
+                        arguments=tc.function.arguments
+                    )
+                )
+                for tc in tool_calls
+            ] if tool_calls else None,
+            raw=None
+        )
+
+        if tools_to_call_from is not None:
+            return parse_tool_args_if_needed(message)
+        return message
+
+
+class StreamingOpenAIServerModel(OpenAIServerModel):
+    """A streaming version of OpenAIServerModel that supports callbacks for each token.
+
+    Parameters:
+        on_chunk_callback (`Callable[[str], None]`, *optional*):
+            A callback function that will be called with each new token chunk.
+        **kwargs:
+            Additional keyword arguments passed to OpenAIServerModel.
+    """
+
+    def __init__(self, on_chunk_callback=None, **kwargs):
+        super().__init__(**kwargs)
+        self.on_chunk_callback = on_chunk_callback
+
+    async def __call__(
+        self,
+        messages: List[Dict[str, str]],
+        stop_sequences: Optional[List[str]] = None,
+        grammar: Optional[str] = None,
+        tools_to_call_from: Optional[List[Tool]] = None,
+        **kwargs,
+    ) -> ChatMessage:
+        completion_kwargs = self._prepare_completion_kwargs(
+            messages=messages,
+            stop_sequences=stop_sequences,
+            grammar=grammar,
+            tools_to_call_from=tools_to_call_from,
+            model=self.model_id,
+            custom_role_conversions=self.custom_role_conversions,
+            convert_images_to_image_urls=True,
+            stream=True,  # Force streaming
+            **kwargs,
+        )
+
+        accumulated_content = ""
+        tool_calls = []
+
+        stream = await self.client.chat.completions.create(**completion_kwargs)
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                accumulated_content += delta.content
+                if self.on_chunk_callback:
+                    self.on_chunk_callback(delta.content)
+            if delta.tool_calls:
+                for tool_call in delta.tool_calls:
+                    if not tool_calls:
+                        tool_calls.append(tool_call)
+                    else:
+                        # Update the last tool call with new content
+                        if tool_call.function.arguments:
+                            tool_calls[-1].function.arguments += tool_call.function.arguments
+
+        self.last_input_token_count = len(completion_kwargs["messages"][0]["content"])  # Approximate
+        self.last_output_token_count = len(accumulated_content)  # Approximate
+
+        message = ChatMessage(
+            role="assistant",
+            content=accumulated_content if not tool_calls else "",
+            tool_calls=[
+                ChatMessageToolCall(
+                    id=tc.id,
+                    type="function",
+                    function=ChatMessageToolCallDefinition(
+                        name=tc.function.name,
+                        arguments=tc.function.arguments
+                    )
+                )
+                for tc in tool_calls
+            ] if tool_calls else None,
+            raw=None
+        )
+
+        if tools_to_call_from is not None:
+            return parse_tool_args_if_needed(message)
+        return message
+
+
+class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
+    """A streaming version of AzureOpenAIServerModel that supports callbacks for each token.
+
+    Parameters:
+        on_chunk_callback (`Callable[[str], None]`, *optional*):
+            A callback function that will be called with each new token chunk.
+        **kwargs:
+            Additional keyword arguments passed to AzureOpenAIServerModel.
+    """
+
+    def __init__(self, on_chunk_callback=None, **kwargs):
+        super().__init__(**kwargs)
+        self.on_chunk_callback = on_chunk_callback
+
+    async def __call__(
+        self,
+        messages: List[Dict[str, str]],
+        stop_sequences: Optional[List[str]] = None,
+        grammar: Optional[str] = None,
+        tools_to_call_from: Optional[List[Tool]] = None,
+        **kwargs,
+    ) -> ChatMessage:
+        completion_kwargs = self._prepare_completion_kwargs(
+            messages=messages,
+            stop_sequences=stop_sequences,
+            grammar=grammar,
+            tools_to_call_from=tools_to_call_from,
+            model=self.model_id,
+            custom_role_conversions=self.custom_role_conversions,
+            convert_images_to_image_urls=True,
+            stream=True,  # Force streaming
+            **kwargs,
+        )
+
+        accumulated_content = ""
+        tool_calls = []
+
+        stream = await self.client.chat.completions.create(**completion_kwargs)
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                accumulated_content += delta.content
+                if self.on_chunk_callback:
+                    self.on_chunk_callback(delta.content)
+            if delta.tool_calls:
+                for tool_call in delta.tool_calls:
+                    if not tool_calls:
+                        tool_calls.append(tool_call)
+                    else:
+                        # Update the last tool call with new content
+                        if tool_call.function.arguments:
+                            tool_calls[-1].function.arguments += tool_call.function.arguments
+
+        self.last_input_token_count = len(completion_kwargs["messages"][0]["content"])  # Approximate
+        self.last_output_token_count = len(accumulated_content)  # Approximate
+
+        message = ChatMessage(
+            role="assistant",
+            content=accumulated_content if not tool_calls else "",
+            tool_calls=[
+                ChatMessageToolCall(
+                    id=tc.id,
+                    type="function",
+                    function=ChatMessageToolCallDefinition(
+                        name=tc.function.name,
+                        arguments=tc.function.arguments
+                    )
+                )
+                for tc in tool_calls
+            ] if tool_calls else None,
+            raw=None
+        )
+
+        if tools_to_call_from is not None:
+            return parse_tool_args_if_needed(message)
+        return message
+
+
 __all__ = [
     "MessageRole",
     "tool_role_conversions",
@@ -1036,4 +1274,7 @@ __all__ = [
     "OpenAIServerModel",
     "AzureOpenAIServerModel",
     "ChatMessage",
+    "StreamingLiteLLMModel",
+    "StreamingOpenAIServerModel",
+    "StreamingAzureOpenAIServerModel",
 ]
