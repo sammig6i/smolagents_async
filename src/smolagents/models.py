@@ -1074,7 +1074,7 @@ class StreamingLiteLLMModel(LiteLLMModel):
             if delta.content:
                 accumulated_content += delta.content
                 if self.on_chunk_callback:
-                    self.on_chunk_callback(delta.content)
+                    await self.on_chunk_callback(delta.content)
             if delta.tool_calls:
                 for tool_call in delta.tool_calls:
                     if not tool_calls:
@@ -1154,7 +1154,7 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
             if delta.content:
                 accumulated_content += delta.content
                 if self.on_chunk_callback:
-                    self.on_chunk_callback(delta.content)
+                    await self.on_chunk_callback(delta.content)
             if delta.tool_calls:
                 for tool_call in delta.tool_calls:
                     if not tool_calls:
@@ -1234,7 +1234,7 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
             if delta.content:
                 accumulated_content += delta.content
                 if self.on_chunk_callback:
-                    self.on_chunk_callback(delta.content)
+                    await self.on_chunk_callback(delta.content)
             if delta.tool_calls:
                 for tool_call in delta.tool_calls:
                     if not tool_calls:
