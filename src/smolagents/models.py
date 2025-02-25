@@ -23,7 +23,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from enum import Enum
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, Callable, Awaitable
 
 from huggingface_hub import InferenceClient
 from huggingface_hub.utils import is_torch_available
@@ -1028,15 +1028,18 @@ class StreamingLiteLLMModel(LiteLLMModel):
     """A streaming version of LiteLLMModel that supports callbacks for each token.
 
     Parameters:
-        on_chunk_callback (`Callable[[str], None]`, *optional*):
-            A callback function that will be called with each new token chunk.
+        on_chunk_callback (`Callable[[str], Awaitable[None]]`, *optional*):
+            An async callback function that will be called with each new token chunk.
+        on_stream_end_callback (`Callable[[ChatMessage], Awaitable[None]]`, *optional*):
+            An async callback function that will be called with the final message when the stream ends.
         **kwargs:
             Additional keyword arguments passed to LiteLLMModel.
     """
 
-    def __init__(self, on_chunk_callback=None, **kwargs):
+    def __init__(self, on_chunk_callback=None, on_stream_end_callback=None, **kwargs):
         super().__init__(**kwargs)
         self.on_chunk_callback = on_chunk_callback
+        self.on_stream_end_callback = on_stream_end_callback
 
     async def __call__(
         self,
@@ -1047,6 +1050,7 @@ class StreamingLiteLLMModel(LiteLLMModel):
         **kwargs,
     ) -> ChatMessage:
         import litellm
+        from typing import Awaitable, Callable
 
         completion_kwargs = self._prepare_completion_kwargs(
             messages=messages,
@@ -1105,7 +1109,11 @@ class StreamingLiteLLMModel(LiteLLMModel):
         )
 
         if tools_to_call_from is not None:
-            return parse_tool_args_if_needed(message)
+            message = parse_tool_args_if_needed(message)
+            
+        if self.on_stream_end_callback:
+            await self.on_stream_end_callback(message)
+            
         return message
 
 
@@ -1113,15 +1121,18 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
     """A streaming version of OpenAIServerModel that supports callbacks for each token.
 
     Parameters:
-        on_chunk_callback (`Callable[[str], None]`, *optional*):
-            A callback function that will be called with each new token chunk.
+        on_chunk_callback (`Callable[[str], Awaitable[None]]`, *optional*):
+            An async callback function that will be called with each new token chunk.
+        on_stream_end_callback (`Callable[[ChatMessage], Awaitable[None]]`, *optional*):
+            An async callback function that will be called with the final message when the stream ends.
         **kwargs:
             Additional keyword arguments passed to OpenAIServerModel.
     """
 
-    def __init__(self, on_chunk_callback=None, **kwargs):
+    def __init__(self, on_chunk_callback=None, on_stream_end_callback=None, **kwargs):
         super().__init__(**kwargs)
         self.on_chunk_callback = on_chunk_callback
+        self.on_stream_end_callback = on_stream_end_callback
 
     async def __call__(
         self,
@@ -1131,6 +1142,8 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
         tools_to_call_from: Optional[List[Tool]] = None,
         **kwargs,
     ) -> ChatMessage:
+        from typing import Awaitable, Callable
+        
         completion_kwargs = self._prepare_completion_kwargs(
             messages=messages,
             stop_sequences=stop_sequences,
@@ -1185,7 +1198,11 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
         )
 
         if tools_to_call_from is not None:
-            return parse_tool_args_if_needed(message)
+            message = parse_tool_args_if_needed(message)
+            
+        if self.on_stream_end_callback:
+            await self.on_stream_end_callback(message)
+            
         return message
 
 
@@ -1193,15 +1210,18 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
     """A streaming version of AzureOpenAIServerModel that supports callbacks for each token.
 
     Parameters:
-        on_chunk_callback (`Callable[[str], None]`, *optional*):
-            A callback function that will be called with each new token chunk.
+        on_chunk_callback (`Callable[[str], Awaitable[None]]`, *optional*):
+            An async callback function that will be called with each new token chunk.
+        on_stream_end_callback (`Callable[[ChatMessage], Awaitable[None]]`, *optional*):
+            An async callback function that will be called with the final message when the stream ends.
         **kwargs:
             Additional keyword arguments passed to AzureOpenAIServerModel.
     """
 
-    def __init__(self, on_chunk_callback=None, **kwargs):
+    def __init__(self, on_chunk_callback=None, on_stream_end_callback=None, **kwargs):
         super().__init__(**kwargs)
         self.on_chunk_callback = on_chunk_callback
+        self.on_stream_end_callback = on_stream_end_callback
 
     async def __call__(
         self,
@@ -1211,6 +1231,8 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
         tools_to_call_from: Optional[List[Tool]] = None,
         **kwargs,
     ) -> ChatMessage:
+        from typing import Awaitable, Callable
+        
         completion_kwargs = self._prepare_completion_kwargs(
             messages=messages,
             stop_sequences=stop_sequences,
@@ -1265,7 +1287,11 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
         )
 
         if tools_to_call_from is not None:
-            return parse_tool_args_if_needed(message)
+            message = parse_tool_args_if_needed(message)
+            
+        if self.on_stream_end_callback:
+            await self.on_stream_end_callback(message)
+            
         return message
 
 
