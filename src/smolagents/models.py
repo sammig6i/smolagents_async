@@ -1155,7 +1155,7 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
             custom_role_conversions=self.custom_role_conversions,
             convert_images_to_image_urls=True,
             stream=True,  # Force streaming
-            stream_options={"include_usage": True}
+            stream_options={"include_usage": True},
             **kwargs,
         )
 
@@ -1246,7 +1246,7 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
             custom_role_conversions=self.custom_role_conversions,
             convert_images_to_image_urls=True,
             stream=True,  # Force streaming
-            stream_options={"include_usage": True}
+            stream_options={"include_usage": True},
             **kwargs,
         )
 
