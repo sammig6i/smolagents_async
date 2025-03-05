@@ -1050,7 +1050,6 @@ class StreamingLiteLLMModel(LiteLLMModel):
         **kwargs,
     ) -> ChatMessage:
         import litellm
-        from typing import Awaitable, Callable
 
         completion_kwargs = self._prepare_completion_kwargs(
             messages=messages,
@@ -1063,16 +1062,20 @@ class StreamingLiteLLMModel(LiteLLMModel):
             convert_images_to_image_urls=True,
             flatten_messages_as_text=self._flatten_messages_as_text,
             custom_role_conversions=self.custom_role_conversions,
-            stream=True,  # Force streaming
+            stream = True,
+            stream_options = {"include_usage": True},
             **kwargs,
         )
 
         accumulated_content = ""
         tool_calls = []
+        usage = None
 
         stream = await litellm.acompletion(**completion_kwargs)
         async for chunk in stream:
             if not chunk.choices:
+                if usage is None:
+                    usage = chunk.usage
                 continue
             delta = chunk.choices[0].delta
             if delta.content:
@@ -1088,8 +1091,8 @@ class StreamingLiteLLMModel(LiteLLMModel):
                         if tool_call.function.arguments:
                             tool_calls[-1].function.arguments += tool_call.function.arguments
 
-        self.last_input_token_count = len(completion_kwargs["messages"][0]["content"])  # Approximate
-        self.last_output_token_count = len(accumulated_content)  # Approximate
+        self.last_input_token_count = usage.prompt_tokens
+        self.last_output_token_count = usage.completion_tokens
 
         message = ChatMessage(
             role="assistant",
@@ -1142,7 +1145,6 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
         tools_to_call_from: Optional[List[Tool]] = None,
         **kwargs,
     ) -> ChatMessage:
-        from typing import Awaitable, Callable
         
         completion_kwargs = self._prepare_completion_kwargs(
             messages=messages,
@@ -1153,15 +1155,19 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
             custom_role_conversions=self.custom_role_conversions,
             convert_images_to_image_urls=True,
             stream=True,  # Force streaming
+            stream_options={"include_usage": True}
             **kwargs,
         )
 
         accumulated_content = ""
         tool_calls = []
+        usage = None
 
         stream = await self.client.chat.completions.create(**completion_kwargs)
         async for chunk in stream:
             if not chunk.choices:
+                if usage is None:
+                    usage = chunk.usage
                 continue
             delta = chunk.choices[0].delta
             if delta.content:
@@ -1177,8 +1183,8 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
                         if tool_call.function.arguments:
                             tool_calls[-1].function.arguments += tool_call.function.arguments
 
-        self.last_input_token_count = len(completion_kwargs["messages"][0]["content"])  # Approximate
-        self.last_output_token_count = len(accumulated_content)  # Approximate
+        self.last_input_token_count = usage.prompt_tokens
+        self.last_output_token_count = usage.completion_tokens
 
         message = ChatMessage(
             role="assistant",
@@ -1230,9 +1236,7 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
         grammar: Optional[str] = None,
         tools_to_call_from: Optional[List[Tool]] = None,
         **kwargs,
-    ) -> ChatMessage:
-        from typing import Awaitable, Callable
-        
+    ) -> ChatMessage:        
         completion_kwargs = self._prepare_completion_kwargs(
             messages=messages,
             stop_sequences=stop_sequences,
@@ -1242,15 +1246,20 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
             custom_role_conversions=self.custom_role_conversions,
             convert_images_to_image_urls=True,
             stream=True,  # Force streaming
+            stream_options={"include_usage": True}
             **kwargs,
         )
 
         accumulated_content = ""
         tool_calls = []
 
+        usage = None
+
         stream = await self.client.chat.completions.create(**completion_kwargs)
         async for chunk in stream:
             if not chunk.choices:
+                if usage is None:
+                    usage = chunk.usage
                 continue
             delta = chunk.choices[0].delta
             if delta.content:
@@ -1266,8 +1275,8 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
                         if tool_call.function.arguments:
                             tool_calls[-1].function.arguments += tool_call.function.arguments
 
-        self.last_input_token_count = len(completion_kwargs["messages"][0]["content"])  # Approximate
-        self.last_output_token_count = len(accumulated_content)  # Approximate
+        self.last_input_token_count = usage.prompt_tokens
+        self.last_output_token_count = usage.completion_tokens
 
         message = ChatMessage(
             role="assistant",
