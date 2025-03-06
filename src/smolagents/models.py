@@ -1073,7 +1073,7 @@ class StreamingLiteLLMModel(LiteLLMModel):
 
         stream = await litellm.acompletion(**completion_kwargs)
         async for chunk in stream:
-            if usage is None and chunk.usage is not None:
+            if usage is None and hasattr(chunk, "usage") and chunk.usage is not None:
                 usage = chunk.usage
                 continue
                 
@@ -1091,9 +1091,8 @@ class StreamingLiteLLMModel(LiteLLMModel):
                         if tool_call.function.arguments:
                             tool_calls[-1].function.arguments += tool_call.function.arguments
 
-        if usage is not None:
-            self.last_input_token_count = usage.prompt_tokens
-            self.last_output_token_count = usage.completion_tokens
+        self.last_input_token_count = usage.prompt_tokens
+        self.last_output_token_count = usage.completion_tokens
 
         message = ChatMessage(
             role="assistant",
@@ -1166,7 +1165,7 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
 
         stream = await self.client.chat.completions.create(**completion_kwargs)
         async for chunk in stream:    
-            if usage is None and chunk.usage is not None:
+            if usage is None and hasattr(chunk, "usage") and chunk.usage is not None:
                 usage = chunk.usage
                 continue
             delta = chunk.choices[0].delta
@@ -1258,7 +1257,7 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
 
         stream = await self.client.chat.completions.create(**completion_kwargs)
         async for chunk in stream:
-            if usage is None and chunk.usage is not None:
+            if usage is None and hasattr(chunk, "usage") and chunk.usage is not None:
                 usage = chunk.usage
                 continue
             delta = chunk.choices[0].delta
