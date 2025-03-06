@@ -1076,20 +1076,23 @@ class StreamingLiteLLMModel(LiteLLMModel):
             if usage is None and hasattr(chunk, "usage") and chunk.usage is not None:
                 usage = chunk.usage
                 continue
-                
-            delta = chunk.choices[0].delta
-            if delta.content:
-                accumulated_content += delta.content
+            if hasattr(chunk, "choices") and len(chunk.choices) > 0:    
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    accumulated_content += delta.content
+
                 if self.on_chunk_callback:
                     await self.on_chunk_callback(delta.content)
-            if delta.tool_calls:
-                for tool_call in delta.tool_calls:
-                    if not tool_calls:
-                        tool_calls.append(tool_call)
-                    else:
-                        # Update the last tool call with new content
-                        if tool_call.function.arguments:
-                            tool_calls[-1].function.arguments += tool_call.function.arguments
+                    
+            
+                if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tool_call in delta.tool_calls:
+                        if not tool_calls:
+                            tool_calls.append(tool_call)
+                        else:
+                            # Update the last tool call with new content
+                            if tool_call.function.arguments:
+                                tool_calls[-1].function.arguments += tool_call.function.arguments
 
         self.last_input_token_count = usage.prompt_tokens
         self.last_output_token_count = usage.completion_tokens
@@ -1168,19 +1171,23 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
             if usage is None and hasattr(chunk, "usage") and chunk.usage is not None:
                 usage = chunk.usage
                 continue
-            delta = chunk.choices[0].delta
-            if delta.content:
-                accumulated_content += delta.content
+
+            if hasattr(chunk, "choices") and len(chunk.choices) > 0:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    accumulated_content += delta.content
+
                 if self.on_chunk_callback:
                     await self.on_chunk_callback(delta.content)
-            if delta.tool_calls:
-                for tool_call in delta.tool_calls:
-                    if not tool_calls:
-                        tool_calls.append(tool_call)
-                    else:
-                        # Update the last tool call with new content
-                        if tool_call.function.arguments:
-                            tool_calls[-1].function.arguments += tool_call.function.arguments
+
+                if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tool_call in delta.tool_calls:
+                        if not tool_calls:
+                            tool_calls.append(tool_call)
+                        else:
+                            # Update the last tool call with new content
+                            if tool_call.function.arguments:
+                                tool_calls[-1].function.arguments += tool_call.function.arguments
 
         if usage is not None:
             self.last_input_token_count = usage.prompt_tokens
@@ -1260,15 +1267,19 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
             if usage is None and hasattr(chunk, "usage") and chunk.usage is not None:
                 usage = chunk.usage
                 continue
-            delta = chunk.choices[0].delta
-            if delta.content:
-                accumulated_content += delta.content
+
+            if hasattr(chunk, "choices") and len(chunk.choices) > 0:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    accumulated_content += delta.content
+
                 if self.on_chunk_callback:
                     await self.on_chunk_callback(delta.content)
-            if delta.tool_calls:
-                for tool_call in delta.tool_calls:
-                    if not tool_calls:
-                        tool_calls.append(tool_call)
+
+                if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tool_call in delta.tool_calls:
+                        if not tool_calls:
+                            tool_calls.append(tool_call)
                     else:
                         # Update the last tool call with new content
                         if tool_call.function.arguments:
