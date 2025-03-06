@@ -1091,8 +1091,9 @@ class StreamingLiteLLMModel(LiteLLMModel):
                         if tool_call.function.arguments:
                             tool_calls[-1].function.arguments += tool_call.function.arguments
 
-        self.last_input_token_count = usage.prompt_tokens
-        self.last_output_token_count = usage.completion_tokens
+        if usage is not None:
+            self.last_input_token_count = usage.prompt_tokens
+            self.last_output_token_count = usage.completion_tokens
 
         message = ChatMessage(
             role="assistant",
@@ -1182,8 +1183,9 @@ class StreamingOpenAIServerModel(OpenAIServerModel):
                         if tool_call.function.arguments:
                             tool_calls[-1].function.arguments += tool_call.function.arguments
 
-        self.last_input_token_count = usage.prompt_tokens
-        self.last_output_token_count = usage.completion_tokens
+        if usage is not None:
+            self.last_input_token_count = usage.prompt_tokens
+            self.last_output_token_count = usage.completion_tokens
 
         message = ChatMessage(
             role="assistant",
@@ -1273,8 +1275,9 @@ class StreamingAzureOpenAIServerModel(AzureOpenAIServerModel):
                         if tool_call.function.arguments:
                             tool_calls[-1].function.arguments += tool_call.function.arguments
 
-        self.last_input_token_count = usage.prompt_tokens
-        self.last_output_token_count = usage.completion_tokens
+        if usage is not None:
+            self.last_input_token_count = usage.prompt_tokens
+            self.last_output_token_count = usage.completion_tokens
 
         message = ChatMessage(
             role="assistant",
