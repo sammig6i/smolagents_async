@@ -3,13 +3,13 @@ from io import BytesIO
 from time import sleep
 
 import helium
+import PIL.Image
 from dotenv import load_dotenv
-from PIL import Image
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
-from smolagents import CodeAgent, DuckDuckGoSearchTool, tool
+from smolagents import CodeAgent, WebSearchTool, tool
 from smolagents.agents import ActionStep
 from smolagents.cli import load_model
 
@@ -37,13 +37,28 @@ def parse_arguments():
         "--model-type",
         type=str,
         default="LiteLLMModel",
-        help="The model type to use (e.g., OpenAIServerModel, LiteLLMModel, TransformersModel, HfApiModel)",
+        help="The model type to use (e.g., OpenAIServerModel, LiteLLMModel, TransformersModel, InferenceClientModel)",
     )
     parser.add_argument(
         "--model-id",
         type=str,
         default="gpt-4o",
         help="The model ID to use for the specified model type",
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        help="The inference provider to use for the model",
+    )
+    parser.add_argument(
+        "--api-base",
+        type=str,
+        help="The API base to use for the model",
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        help="The API key to use for the model",
     )
     return parser.parse_args()
 
@@ -57,7 +72,7 @@ def save_screenshot(memory_step: ActionStep, agent: CodeAgent) -> None:
             if isinstance(previous_memory_step, ActionStep) and previous_memory_step.step_number <= current_step - 2:
                 previous_memory_step.observations_images = None
         png_bytes = driver.get_screenshot_as_png()
-        image = Image.open(BytesIO(png_bytes))
+        image = PIL.Image.open(BytesIO(png_bytes))
         print(f"Captured a browser screenshot: {image.size} pixels")
         memory_step.observations_images = [image.copy()]  # Create a copy to ensure it persists, important!
 
@@ -114,7 +129,7 @@ def initialize_driver():
 def initialize_agent(model):
     """Initialize the CodeAgent with the specified model."""
     return CodeAgent(
-        tools=[DuckDuckGoSearchTool(), go_back, close_popups, search_item_ctrl_f],
+        tools=[WebSearchTool(), go_back, close_popups, search_item_ctrl_f],
         model=model,
         additional_authorized_imports=["helium"],
         step_callbacks=[save_screenshot],
@@ -187,23 +202,33 @@ When you have modals or cookie banners on screen, you should get rid of them bef
 """
 
 
-def main():
+def run_webagent(
+    prompt: str,
+    model_type: str,
+    model_id: str,
+    provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> None:
     # Load environment variables
     load_dotenv()
 
-    # Parse command line arguments
-    args = parse_arguments()
-
     # Initialize the model based on the provided arguments
-    model = load_model(args.model_type, args.model_id)
+    model = load_model(model_type, model_id, provider=provider, api_base=api_base, api_key=api_key)
 
     global driver
     driver = initialize_driver()
     agent = initialize_agent(model)
 
     # Run the agent with the provided prompt
-    agent.python_executor("from helium import *", agent.state)
-    agent.run(args.prompt + helium_instructions)
+    agent.python_executor("from helium import *")
+    agent.run(prompt + helium_instructions)
+
+
+def main() -> None:
+    # Parse command line arguments
+    args = parse_arguments()
+    run_webagent(args.prompt, args.model_type, args.model_id, args.provider, args.api_base, args.api_key)
 
 
 if __name__ == "__main__":

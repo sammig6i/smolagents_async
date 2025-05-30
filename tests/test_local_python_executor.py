@@ -15,17 +15,23 @@
 
 import ast
 import types
-import unittest
+from contextlib import nullcontext as does_not_raise
 from textwrap import dedent
+from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from smolagents.default_tools import BASE_PYTHON_TOOLS
+from smolagents.default_tools import BASE_PYTHON_TOOLS, FinalAnswerTool
 from smolagents.local_python_executor import (
+    DANGEROUS_FUNCTIONS,
+    DANGEROUS_MODULES,
     InterpreterError,
+    LocalPythonExecutor,
     PrintContainer,
-    check_module_authorized,
+    check_import_authorized,
+    evaluate_boolop,
     evaluate_condition,
     evaluate_delete,
     await evaluate_python_code,
@@ -39,26 +45,25 @@ def add_two(x):
     return x + 2
 
 
-class PythonInterpreterTester(unittest.TestCase):
+class TestEvaluatePythonCode:
     def assertDictEqualNoPrint(self, dict1, dict2):
-        return self.assertDictEqual(
-            {k: v for k, v in dict1.items() if k != "_print_outputs"},
-            {k: v for k, v in dict2.items() if k != "_print_outputs"},
-        )
+        assert {k: v for k, v in dict1.items() if k != "_print_outputs"} == {
+            k: v for k, v in dict2.items() if k != "_print_outputs"
+        }
 
     async def test_evaluate_assign(self):
         code = "x = 3"
         state = {}
         result, _ = await evaluate_python_code(code, {}, state=state)
         assert result == 3
-        self.assertDictEqualNoPrint(state, {"x": 3, "_operations_count": 2})
+        self.assertDictEqualNoPrint(state, {"x": 3, "_operations_count": {"counter": 2}})
 
         code = "x = y"
         state = {"y": 5}
         result, _ = await evaluate_python_code(code, {}, state=state)
         # evaluate returns the value of the last assignment.
         assert result == 5
-        self.assertDictEqualNoPrint(state, {"x": 5, "y": 5, "_operations_count": 2})
+        self.assertDictEqualNoPrint(state, {"x": 5, "y": 5, "_operations_count": {"counter": 2}})
 
         code = "a=1;b=None"
         result, _ = await evaluate_python_code(code, {}, state={})
@@ -84,7 +89,7 @@ class PythonInterpreterTester(unittest.TestCase):
         state = {"x": 3}
         result, _ = await evaluate_python_code(code, {"add_two": add_two}, state=state)
         assert result == 5
-        self.assertDictEqualNoPrint(state, {"x": 3, "y": 5, "_operations_count": 3})
+        self.assertDictEqualNoPrint(state, {"x": 3, "y": 5, "_operations_count": {"counter": 3}})
 
         # Should not work without the tool
         with pytest.raises(InterpreterError) as e:
@@ -96,7 +101,7 @@ class PythonInterpreterTester(unittest.TestCase):
         state = {}
         result, _ = await evaluate_python_code(code, {}, state=state)
         assert result == 3
-        self.assertDictEqualNoPrint(state, {"x": 3, "_operations_count": 2})
+        self.assertDictEqualNoPrint(state, {"x": 3, "_operations_count": {"counter": 2}})
 
     async def test_evaluate_dict(self):
         code = "test_dict = {'x': x, 'y': add_two(x)}"
@@ -111,7 +116,7 @@ class PythonInterpreterTester(unittest.TestCase):
         result, _ = await evaluate_python_code(code, {}, state=state)
         # evaluate returns the value of the last assignment.
         assert result == 5
-        self.assertDictEqualNoPrint(state, {"x": 3, "y": 5, "_operations_count": 4})
+        self.assertDictEqualNoPrint(state, {"x": 3, "y": 5, "_operations_count": {"counter": 4}})
 
     async def test_evaluate_f_string(self):
         code = "text = f'This is x: {x}.'"
@@ -127,13 +132,13 @@ class PythonInterpreterTester(unittest.TestCase):
         result, _ = await evaluate_python_code(code, {}, state=state)
         # evaluate returns the value of the last assignment.
         assert result == 2
-        self.assertDictEqualNoPrint(state, {"x": 3, "y": 2, "_operations_count": 6})
+        self.assertDictEqualNoPrint(state, {"x": 3, "y": 2, "_operations_count": {"counter": 6}})
 
         state = {"x": 8}
         result, _ = await evaluate_python_code(code, {}, state=state)
         # evaluate returns the value of the last assignment.
         assert result == 5
-        self.assertDictEqualNoPrint(state, {"x": 8, "y": 5, "_operations_count": 6})
+        self.assertDictEqualNoPrint(state, {"x": 8, "y": 5, "_operations_count": {"counter": 6}})
 
     async def test_evaluate_list(self):
         code = "test_list = [x, add_two(x)]"
@@ -147,20 +152,22 @@ class PythonInterpreterTester(unittest.TestCase):
         state = {"x": 3}
         result, _ = await evaluate_python_code(code, {}, state=state)
         assert result == 3
-        self.assertDictEqualNoPrint(state, {"x": 3, "y": 3, "_operations_count": 2})
+        self.assertDictEqualNoPrint(state, {"x": 3, "y": 3, "_operations_count": {"counter": 2}})
 
     async def test_evaluate_subscript(self):
         code = "test_list = [x, add_two(x)]\ntest_list[1]"
         state = {"x": 3}
         result, _ = await evaluate_python_code(code, {"add_two": add_two}, state=state)
         assert result == 5
-        self.assertDictEqualNoPrint(state, {"x": 3, "test_list": [3, 5], "_operations_count": 9})
+        self.assertDictEqualNoPrint(state, {"x": 3, "test_list": [3, 5], "_operations_count": {"counter": 9}})
 
         code = "test_dict = {'x': x, 'y': add_two(x)}\ntest_dict['y']"
         state = {"x": 3}
         result, _ = await evaluate_python_code(code, {"add_two": add_two}, state=state)
         assert result == 5
-        self.assertDictEqualNoPrint(state, {"x": 3, "test_dict": {"x": 3, "y": 5}, "_operations_count": 11})
+        self.assertDictEqualNoPrint(
+            state, {"x": 3, "test_dict": {"x": 3, "y": 5}, "_operations_count": {"counter": 11}}
+        )
 
         code = "vendor = {'revenue': 31000, 'rent': 50312}; vendor['ratio'] = round(vendor['revenue'] / vendor['rent'], 2)"
         state = {}
@@ -184,14 +191,14 @@ for result in search_results:
         state = {}
         result, _ = await evaluate_python_code(code, {"range": range}, state=state)
         assert result == 2
-        self.assertDictEqualNoPrint(state, {"x": 2, "i": 2, "_operations_count": 11})
+        self.assertDictEqualNoPrint(state, {"x": 2, "i": 2, "_operations_count": {"counter": 11}})
 
     async def test_evaluate_binop(self):
         code = "y + x"
         state = {"x": 3, "y": 6}
         result, _ = await evaluate_python_code(code, {}, state=state)
         assert result == 9
-        self.assertDictEqualNoPrint(state, {"x": 3, "y": 6, "_operations_count": 4})
+        self.assertDictEqualNoPrint(state, {"x": 3, "y": 6, "_operations_count": {"counter": 4}})
 
     async def test_recursive_function(self):
         code = """
@@ -347,12 +354,14 @@ shift_minutes = {worker: ('a', 'b') for worker, (start, end) in shifts.items()}
         assert "iterations in While loop exceeded" in str(e)
 
         # test lazy evaluation
-        code = """
-house_positions = [0, 7, 10, 15, 18, 22, 22]
-i, n, loc = 0, 7, 30
-while i < n and house_positions[i] <= loc:
-    i += 1
-"""
+        code = dedent(
+            """
+            house_positions = [0, 7, 10, 15, 18, 22, 22]
+            i, n, loc = 0, 7, 30
+            while i < n and house_positions[i] <= loc:
+                i += 1
+            """
+        )
         state = {}
         await evaluate_python_code(code, BASE_PYTHON_TOOLS, state=state)
 
@@ -634,7 +643,8 @@ counts_list = [1, 2, 3]
 counts_list += [4, 5, 6]
 
 class Counter:
-    self.count = 0
+    def __init__(self):
+        self.count = 0
 
 a = Counter()
 a.count += 1
@@ -981,32 +991,183 @@ texec(tcompile("1 + 1", "no filename", "exec"))
         dangerous_code = "import os; os.listdir('./')"
         await evaluate_python_code(dangerous_code, authorized_imports=["*"])
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
+    def test_can_import_scipy_if_explicitly_authorized(self):
+        code = "import scipy"
+        evaluate_python_code(code, authorized_imports=["scipy"])
 
-@pytest.mark.parametrize(
-    "code, expected_result",
-    [
-        (
-            dedent("""\
-                x = 1
-                x += 2
-            """),
-            3,
-        ),
-        (
-            dedent("""\
-                x = "a"
-                x += "b"
-            """),
-            "ab",
-        ),
-        (
-            dedent("""\
-                class Custom:
-                    def __init__(self, value):
-                        self.value = value
-                    def __iadd__(self, other):
-                        self.value += other * 10
-                        return self
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
+    def test_can_import_sklearn_if_explicitly_authorized(self):
+        code = "import sklearn"
+        evaluate_python_code(code, authorized_imports=["sklearn"])
+
+    def test_function_def_recovers_source_code(self):
+        executor = LocalPythonExecutor([])
+
+        executor.send_tools({"final_answer": FinalAnswerTool()})
+
+        res, _, _ = executor(
+            dedent(
+                """
+                def target_function():
+                    return "Hello world"
+
+                final_answer(target_function)
+                """
+            )
+        )
+        assert res.__name__ == "target_function"
+        assert res.__source__ == "def target_function():\n    return 'Hello world'"
+
+    def test_evaluate_class_def_with_pass(self):
+        code = dedent("""
+            class TestClass:
+                pass
+
+            instance = TestClass()
+            instance.attr = "value"
+            result = instance.attr
+        """)
+        state = {}
+        result, _ = evaluate_python_code(code, BASE_PYTHON_TOOLS, state=state)
+        assert result == "value"
+
+    def test_evaluate_class_def_with_ann_assign_name(self):
+        """
+        Test evaluate_class_def function when stmt is an instance of ast.AnnAssign with ast.Name target.
+
+        This test verifies that annotated assignments within a class definition are correctly evaluated.
+        """
+        code = dedent("""
+            class TestClass:
+                x: int = 5
+                y: str = "test"
+
+            instance = TestClass()
+            result = (instance.x, instance.y)
+        """)
+
+        state = {}
+        result, _ = evaluate_python_code(code, BASE_PYTHON_TOOLS, state=state)
+
+        assert result == (5, "test")
+        assert isinstance(state["TestClass"], type)
+        # Values are wrapped by safer_func
+        annotations = {key: value.__wrapped__ for key, value in state["TestClass"].__annotations__.items()}
+        assert annotations == {"x": int, "y": str}
+        assert state["TestClass"].x == 5
+        assert state["TestClass"].y == "test"
+        assert isinstance(state["instance"], state["TestClass"])
+        assert state["instance"].x == 5
+        assert state["instance"].y == "test"
+
+    def test_evaluate_class_def_with_ann_assign_attribute(self):
+        """
+        Test evaluate_class_def function when stmt is an instance of ast.AnnAssign with ast.Attribute target.
+
+        This test ensures that class attributes using attribute notation are correctly handled.
+        """
+        code = dedent("""
+        class TestSubClass:
+            attr = 1
+        class TestClass:
+            data: TestSubClass = TestSubClass()
+            data.attr: str = "value"
+
+        result = TestClass.data.attr
+        """)
+
+        state = {}
+        result, _ = evaluate_python_code(code, BASE_PYTHON_TOOLS, state=state)
+
+        assert result == "value"
+        assert isinstance(state["TestClass"], type)
+        assert state["TestClass"].__annotations__.keys() == {"data"}
+        assert isinstance(state["TestClass"].__annotations__["data"], type)
+        assert state["TestClass"].__annotations__["data"].__name__ == "TestSubClass"
+        assert state["TestClass"].data.attr == "value"
+
+    def test_evaluate_class_def_with_ann_assign_subscript(self):
+        """
+        Test evaluate_class_def function when stmt is an instance of ast.AnnAssign with ast.Subscript target.
+
+        This test ensures that class attributes using subscript notation are correctly handled.
+        """
+        code = dedent("""
+        class TestClass:
+            key_data: dict = {}
+            key_data["key"]: str = "value"
+            index_data: list = [10, 20, 30]
+            index_data[0:2]: list[str] = ["a", "b"]
+
+        result = (TestClass.key_data['key'], TestClass.index_data[1:])
+        """)
+
+        state = {}
+        result, _ = evaluate_python_code(code, BASE_PYTHON_TOOLS, state=state)
+
+        assert result == ("value", ["b", 30])
+        assert isinstance(state["TestClass"], type)
+        # Values are wrapped by safer_func
+        annotations = {key: value.__wrapped__ for key, value in state["TestClass"].__annotations__.items()}
+        assert annotations == {"key_data": dict, "index_data": list}
+        assert state["TestClass"].key_data == {"key": "value"}
+        assert state["TestClass"].index_data == ["a", "b", 30]
+
+    def test_evaluate_annassign(self):
+        code = dedent("""\
+            # Basic annotated assignment
+            x: int = 42
+
+            # Type annotations with expressions
+            y: float = x / 2
+
+            # Type annotation without assignment
+            z: list
+
+            # Type annotation with complex value
+            names: list = ["Alice", "Bob", "Charlie"]
+
+            # Type hint shouldn't restrict values at runtime
+            s: str = 123  # Would be a type error in static checking, but valid at runtime
+
+            # Access the values
+            result = (x, y, names, s)
+        """)
+        state = {}
+        evaluate_python_code(code, BASE_PYTHON_TOOLS, state=state)
+        assert state["x"] == 42
+        assert state["y"] == 21.0
+        assert "z" not in state  # z should be not be defined
+        assert state["names"] == ["Alice", "Bob", "Charlie"]
+        assert state["s"] == 123  # Type hints don't restrict at runtime
+        assert state["result"] == (42, 21.0, ["Alice", "Bob", "Charlie"], 123)
+
+    @pytest.mark.parametrize(
+        "code, expected_result",
+        [
+            (
+                dedent("""\
+                    x = 1
+                    x += 2
+                """),
+                3,
+            ),
+            (
+                dedent("""\
+                    x = "a"
+                    x += "b"
+                """),
+                "ab",
+            ),
+            (
+                dedent("""\
+                    class Custom:
+                        def __init__(self, value):
+                            self.value = value
+                        def __iadd__(self, other):
+                            self.value += other * 10
+                            return self
 
                 x = Custom(1)
                 x += 2
@@ -1216,7 +1377,7 @@ async def test_get_safe_module_handle_lazy_imports():
             return super().__dir__() + ["lazy_attribute"]
 
     fake_module = FakeModule("fake_module")
-    safe_module = get_safe_module(fake_module, dangerous_patterns=[], authorized_imports=set())
+    safe_module = get_safe_module(fake_module, authorized_imports=set())
     assert not hasattr(safe_module, "lazy_attribute")
     assert getattr(safe_module, "non_lazy_attribute") == "ok"
 
@@ -1277,10 +1438,48 @@ class TestPrintContainer:
         assert len(pc) == 5
 
 
+def test_fix_final_answer_code():
+    test_cases = [
+        (
+            "final_answer = 3.21\nfinal_answer(final_answer)",
+            "final_answer_variable = 3.21\nfinal_answer(final_answer_variable)",
+        ),
+        (
+            "x = final_answer(5)\nfinal_answer = x + 1\nfinal_answer(final_answer)",
+            "x = final_answer(5)\nfinal_answer_variable = x + 1\nfinal_answer(final_answer_variable)",
+        ),
+        (
+            "def func():\n    final_answer = 42\n    return final_answer(final_answer)",
+            "def func():\n    final_answer_variable = 42\n    return final_answer(final_answer_variable)",
+        ),
+        (
+            "final_answer(5)  # Should not change function calls",
+            "final_answer(5)  # Should not change function calls",
+        ),
+        (
+            "obj.final_answer = 5  # Should not change object attributes",
+            "obj.final_answer = 5  # Should not change object attributes",
+        ),
+        (
+            "final_answer=3.21;final_answer(final_answer)",
+            "final_answer_variable=3.21;final_answer(final_answer_variable)",
+        ),
+    ]
+
+    for i, (input_code, expected) in enumerate(test_cases, 1):
+        result = fix_final_answer_code(input_code)
+        assert result == expected, f"""
+Test case {i} failed:
+Input:    {input_code}
+Expected: {expected}
+Got:      {result}
+"""
+
+
 @pytest.mark.parametrize(
     "module,authorized_imports,expected",
     [
-        ("os", ["*"], True),
+        ("os", ["other", "*"], True),
         ("AnyModule", ["*"], True),
         ("os", ["os"], True),
         ("AnyModule", ["AnyModule"], True),
